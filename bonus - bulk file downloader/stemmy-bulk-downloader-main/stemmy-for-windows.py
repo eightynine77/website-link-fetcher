@@ -9,8 +9,7 @@ COLOR_MAP = {
     "34": "Blue",
     "35": "Magenta",
     "36": "Cyan",
-    "37": "White",
-    
+    "37": "White"
 }
 
 def ps_print(text, color=None, end="\n", no_newline=False):
@@ -99,4 +98,5 @@ def download_links_from_file(file_path, destination_folder="downloads"):
 if __name__ == "__main__":
     links_file = "links.txt"  
     output_folder = "downloads"
+
     download_links_from_file(links_file, output_folder)
