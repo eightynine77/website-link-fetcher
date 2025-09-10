@@ -5,34 +5,59 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import datetime
 
+REQUEST_TIMEOUT = 20
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+
 def fetch_all_image_links(url, keyword):
-    """Fetches image URLs that contain the keyword from a web page."""
-    links = []
+    """Fetches image URLs that contain the keyword from a web page, resolving relative links."""
+    links = set()
     error_message = None
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-        response = requests.get(url, headers=headers, timeout=1)
+        headers = {'User-Agent': USER_AGENT}
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
-        for img_tag in soup.find_all('img', src=True):
-            src_url = img_tag['src']
-            if not src_url or src_url.lower().startswith('javascript:'):
-                continue
-            absolute_link = urljoin(url, src_url)
-            if keyword.lower() in absolute_link.lower():  # Filter by keyword
-                links.append(absolute_link)
+        base_url = response.url  # use the final URL as base for urljoin
 
-        links = sorted(list(set(links)))
-        return links, None
+        # <img src="...">
+        for img_tag in soup.find_all('img', src=True):
+            src_url = img_tag['src'].strip()
+            if not src_url or src_url.lower().startswith(('javascript:', 'data:')):
+                continue
+            absolute_link = urljoin(base_url, src_url)
+            parsed = urlparse(absolute_link)
+            if parsed.scheme not in ('http', 'https'):
+                continue
+            normalized = parsed.geturl()
+            if keyword.lower() in normalized.lower():
+                links.add(normalized)
+
+        # also check for <source srcset> and img srcset (some responsive images)
+        for tag in soup.find_all(srcset=True):
+            srcset_value = tag.get('srcset', '')
+            # srcset can contain multiple candidates separated by commas
+            candidates = [c.strip().split(' ')[0] for c in srcset_value.split(',') if c.strip()]
+            for candidate in candidates:
+                absolute_link = urljoin(base_url, candidate)
+                parsed = urlparse(absolute_link)
+                if parsed.scheme not in ('http', 'https'):
+                    continue
+                normalized = parsed.geturl()
+                if keyword.lower() in normalized.lower():
+                    links.add(normalized)
+
+        links_list = sorted(links)
+        return links_list, None
 
     except requests.exceptions.Timeout:
         return None, f"Timeout: {url}"
     except requests.exceptions.RequestException as e:
-        status = f"Status Code: {e.response.status_code}" if e.response else "N/A"
+        status = f"Status Code: {e.response.status_code}" if getattr(e, 'response', None) else "N/A"
         return None, f"Error fetching {url}: {e} ({status})"
     except Exception as e:
         return None, f"Unexpected error with {url}: {e}"
+
 
 def save_all_results_to_file(filename, combined_links, script_name, url_count):
     """Saves the combined image links (deduplicated and sorted) to a text file."""
@@ -50,6 +75,7 @@ def save_all_results_to_file(filename, combined_links, script_name, url_count):
     except Exception as e:
         return False, f"Error saving file: {e}"
 
+
 if __name__ == "__main__":
     script_name = os.path.basename(__file__)
     input_file = input("Enter the path to the text file containing web page URLs: ").strip()
@@ -57,7 +83,10 @@ if __name__ == "__main__":
     if not os.path.isfile(input_file):
         print(f"Error: File '{input_file}' not found.")
         print("\nPress any key to exit...")
-        msvcrt.getch()
+        try:
+            msvcrt.getch()
+        except Exception:
+            pass
         exit()
 
     with open(input_file, 'r', encoding='utf-8') as f:
@@ -66,28 +95,41 @@ if __name__ == "__main__":
     if not urls:
         print("No valid URLs found in the file.")
         print("\nPress any key to exit...")
-        msvcrt.getch()
+        try:
+            msvcrt.getch()
+        except Exception:
+            pass
         exit()
 
     keyword = input("Enter keyword to filter image links: ").strip()
     if not keyword:
         print("Keyword cannot be empty.")
         print("\nPress any key to exit...")
-        msvcrt.getch()
+        try:
+            msvcrt.getch()
+        except Exception:
+            pass
         exit()
 
     all_results = {}
 
     for url in urls:
         parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
+        # If scheme missing, assume https
+        if not parsed.scheme:
+            url_to_fetch = 'https://' + url
+        else:
+            url_to_fetch = url
+
+        parsed2 = urlparse(url_to_fetch)
+        if not parsed2.scheme or not parsed2.netloc:
             print(f"\nFetching image links from: {url}")
             print("Invalid URL format.")
             all_results[url] = "Invalid URL format"
             continue
 
-        print(f"\nFetching image links from: {url}")
-        links, error = fetch_all_image_links(url, keyword)
+        print(f"\nFetching image links from: {url_to_fetch}")
+        links, error = fetch_all_image_links(url_to_fetch, keyword)
         if error:
             print(error)
             all_results[url] = error
@@ -111,10 +153,8 @@ if __name__ == "__main__":
 
     # Ask to save
     while True:
-        print(f"\n\n--- Combined Image Links ({len(combined_links)} total) ---")
-        print("")
-        print(f"note: duplicate links are removed, filtered by keyword: '{keyword}'")
-        print("")
+        print(f"\n\n--- Combined Image Links ({len(combined_links)} total) ---\n")
+        print(f"note: duplicate links are removed, filtered by keyword: '{keyword}'\n")
         save_choice = input("\nDo you want to save all image links to a text file? (yes/no): ").lower().strip()
         if save_choice in ['yes', 'y']:
             default_filename = f"filtered_image_links_{keyword}_{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
@@ -136,4 +176,7 @@ if __name__ == "__main__":
 
     print("\nProcess completed.")
     print("\nPress any key to close this python script...")
-    msvcrt.getch()
+    try:
+        msvcrt.getch()
+    except Exception:
+        pass
