@@ -8,6 +8,7 @@ import time
 
 REQUEST_TIMEOUT = 20
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+# note: use a working user agent when this one doesn't work
 
 def fetch_links_in_web_page(url, text_pattern_to_search):
     """
