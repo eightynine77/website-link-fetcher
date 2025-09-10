@@ -4,43 +4,60 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import datetime
 import msvcrt
-import time 
+import time
 
-REQUEST_TIMEOUT = 20 
-USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' # Example User Agent
+REQUEST_TIMEOUT = 20
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 
 def fetch_links_in_web_page(url, text_pattern_to_search):
-    links = []
+    """
+    Fetch links from a single page, resolving relative links to absolute using response.url
+    (so redirects are handled). Returns (links_list, error_message).
+    """
+    links = set()
     error_message = None
     print(f"  Fetching: {url}")
     try:
         headers = {'User-Agent': USER_AGENT}
         response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        response.raise_for_status() 
+        response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
-        base_url = response.url 
+        base_url = response.url  # use final URL after redirects as base
 
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].strip()
 
-            if not href or href.lower().startswith(('javascript:', 'mailto:')):
+            # Skip anchors, javascript:, mailto:, tel:, and data URIs
+            if not href or href.startswith('#') or href.lower().startswith(('javascript:', 'mailto:', 'tel:', 'data:')):
                 continue
 
             absolute_link = urljoin(base_url, href)
+            parsed = urlparse(absolute_link)
 
-            if text_pattern_to_search in absolute_link:
-                links.append(absolute_link)
+            # Ensure we only keep http(s) links
+            if parsed.scheme not in ('http', 'https'):
+                continue
 
-        links = sorted(list(set(links)))
-        print(f"  Found {len(links)} matching links on this page.")
-        return links, None
+            normalized = parsed.geturl()
+
+            # case-insensitive substring match (if provided)
+            if text_pattern_to_search:
+                if text_pattern_to_search.lower() not in normalized.lower():
+                    continue
+
+            links.add(normalized)
+
+        links_list = sorted(links)
+        print(f"  Found {len(links_list)} matching links on this page.")
+        return links_list, None
 
     except requests.exceptions.Timeout:
         error_message = f"Error: The request to {url} timed out after {REQUEST_TIMEOUT} seconds."
-        return [], error_message 
+        return [], error_message
     except requests.exceptions.HTTPError as e:
-        error_message = f"Error: HTTP Error {e.response.status_code} for URL {url}"
+        status = e.response.status_code if e.response is not None else "N/A"
+        error_message = f"Error: HTTP Error {status} for URL {url}"
         return [], error_message
     except requests.exceptions.ConnectionError:
         error_message = f"Error: Could not connect to {url}. Check network or URL validity."
@@ -52,6 +69,7 @@ def fetch_links_in_web_page(url, text_pattern_to_search):
         error_message = f"An unexpected error occurred while processing {url}: {e}"
         return [], error_message
 
+
 def save_links_to_file(filename, links, script_name, input_file_path, text_pattern):
     """Saves the collected links to a text file."""
     try:
@@ -60,7 +78,7 @@ def save_links_to_file(filename, links, script_name, input_file_path, text_patte
             f.write(f"# Source URL list file: {input_file_path}\n")
             f.write(f"# Fetched on: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
             f.write(f"# Total unique matching links found: {len(links)}\n")
-            f.write("#" + "-"*40 + "\n\n") 
+            f.write("#" + "-"*40 + "\n\n")
             if links:
                 for link in links:
                     f.write(link + '\n')
@@ -74,6 +92,7 @@ def save_links_to_file(filename, links, script_name, input_file_path, text_patte
         error_message = f"An unexpected error occurred during file saving: {e}"
         return False, error_message
 
+
 def is_valid_url(url):
     try:
         result = urlparse(url)
@@ -81,21 +100,24 @@ def is_valid_url(url):
     except ValueError:
         return False
 
+
 def add_scheme_if_missing(url):
+    """
+    If user omitted scheme, attempt to add a scheme.
+    Prefer https, but keep the original behavior warning if needed.
+    """
     parsed = urlparse(url)
     if not parsed.scheme:
-        
-        if '.' in parsed.path and '/' not in parsed.path.split('.')[0]: 
-             print(f"  Warning: Assuming 'http://' for '{url}'")
-             return 'http://' + url
+        # assume https by default
+        # but if the user explicitly used something like "example.com/path", we add https://
+        guess = 'https://' + url
+        return guess
     return url
 
 
 if __name__ == "__main__":
     script_name = os.path.basename(__file__)
-    print(f"--- {script_name} ---")
-    print(f"")
-    print(f"")
+    print(f"--- {script_name} ---\n\n")
     print("Fetches links containing specific text from multiple web pages listed in a file.")
 
     while True:
@@ -115,11 +137,11 @@ if __name__ == "__main__":
             lines = f.readlines()
             for line in lines:
                 url = line.strip()
-                if url and not url.startswith('#'): 
+                if url and not url.startswith('#'):
                     urls_to_process.append(url)
     except Exception as e:
         print(f"Error reading URL file '{url_file_path}': {e}")
-        exit() 
+        exit()
 
     if not urls_to_process:
         print(f"No URLs found in '{url_file_path}'. Exiting.")
@@ -153,11 +175,11 @@ if __name__ == "__main__":
             print(f"  {error}")
             errors_encountered.append(f"{url_to_fetch}: {error}")
         if found_links_for_url:
-            all_found_links.extend(found_links_for_url) 
+            all_found_links.extend(found_links_for_url)
 
         processed_count += 1
-        # Optional: Add a small delay between requests to be polite to servers
-        # time.sleep(0.5) # Sleep for 0.5 seconds
+        # polite delay (optional)
+        # time.sleep(0.2)
 
     print("\n--- Processing Complete ---")
 
@@ -184,7 +206,6 @@ if __name__ == "__main__":
             save_choice = input("\nDo you want to save these unique links to a text file? (yes/no): ").lower().strip()
             if save_choice in ['yes', 'y']:
                 input_filename_base = os.path.splitext(os.path.basename(url_file_path))[0]
-                default_filename = f"{input_filename_base}_links_{text_pattern}_{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
                 safe_pattern = "".join(c if c.isalnum() else "_" for c in text_pattern) if text_pattern else "all"
                 default_filename = f"{input_filename_base}_links_{safe_pattern}_{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
 
@@ -196,20 +217,20 @@ if __name__ == "__main__":
                 print(f"Saving links to '{output_filename}'...")
                 success, save_error = save_links_to_file(output_filename, unique_found_links, script_name, url_file_path, text_pattern)
                 if success:
-                    print("Links saved successfully.")
-                    print("")
-                    print("")
-                    print("press any key to close this python script...")
-                    msvcrt.getch()
+                    print("Links saved successfully.\n\npress any key to close this python script...")
+                    try:
+                        msvcrt.getch()
+                    except Exception:
+                        pass
                 else:
                     print(save_error)
-                break 
+                break
             elif save_choice in ['no', 'n']:
-                print("Okay, links will not be saved.")
-                print("")
-                print("")
-                print("press any key to close this python script...")
-                msvcrt.getch()
+                print("Okay, links will not be saved.\n\npress any key to close this python script...")
+                try:
+                    msvcrt.getch()
+                except Exception:
+                    pass
                 break
             else:
                 print("Invalid input. Please enter 'yes' or 'no'.")
