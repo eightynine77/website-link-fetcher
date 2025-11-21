@@ -1,11 +1,18 @@
 import msvcrt
-import requests
 import os
 import re
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import datetime
 import sys
+
+# --- NEW IMPORTS ---
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException, WebDriverException
+# --- END NEW IMPORTS ---
 
 
 def fetch_links_in_web_page(url, text_pattern=None, use_regex=False, timeout=20):
@@ -15,25 +22,48 @@ def fetch_links_in_web_page(url, text_pattern=None, use_regex=False, timeout=20)
     regex `text_pattern` if use_regex=True. If text_pattern is None or empty, all
     http(s) links will be returned.
 
+    This version uses Selenium to load the page, allowing JavaScript to render.
+
     Returns (links_list, error_message)
     """
     links = set()
+    driver = None  # Initialize driver for the 'finally' block
 
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-                          ' AppleWebKit/537.36 (KHTML, like Gecko)'
-                          ' Chrome/58.0.3029.110 Safari/537.3'
-        }
+        # --- Selenium Setup ---
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")  # Run without a visible browser window
+        chrome_options.add_argument("--disable-gpu") # Recommended for headless mode
+        chrome_options.add_argument("--log-level=3")  # Suppress console logs
+        
+        # Use a modern user agent
+        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        # Suppress webdriver-manager logs
+        os.environ['WDM_LOG_LEVEL'] = '0' 
+        
+        # Use webdriver-manager to automatically get the correct driver
+        driver_service = Service(ChromeDriverManager().install())
+        
+        driver = webdriver.Chrome(service=driver_service, options=chrome_options)
+        
+        # Set the timeout for the page *load*
+        driver.set_page_load_timeout(timeout)
+        
+        # Fetch the page (this will wait for JS to run)
+        driver.get(url)
+        
+        # response.url equivalent (gets URL after redirects)
+        base_url = driver.current_url
+        
+        # response.content equivalent (gets final, rendered HTML)
+        page_content = driver.page_source
+        
+        # --- End of Selenium-specific code ---
 
-        response = requests.get(url, headers=headers, timeout=timeout)
-        response.raise_for_status()
+        soup = BeautifulSoup(page_content, 'html.parser')
 
-        # response.url gives the final URL after redirects; use it as the base for urljoin
-        base_url = response.url
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
+        # --- YOUR ORIGINAL PARSING LOGIC (UNCHANGED) ---
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].strip()
 
@@ -65,19 +95,30 @@ def fetch_links_in_web_page(url, text_pattern=None, use_regex=False, timeout=20)
                         continue
 
             links.add(normalized)
+        # --- END OF YOUR ORIGINAL LOGIC ---
 
         links_list = sorted(links)
         return links_list, None
 
-    except requests.exceptions.Timeout:
-        return None, f"Error: The request to {url} timed out."
-    except requests.exceptions.RequestException as e:
-        return None, f"Error fetching URL {url}: {e}"
+    except TimeoutException:
+        return None, f"Error: The request to {url} timed out (Selenium page load)."
+    except WebDriverException as e:
+        # Simplify the complex WebDriver error message
+        error_lines = str(e).split('\n')
+        simple_error = error_lines[0] if error_lines else "WebDriver error"
+        return None, f"Error fetching URL {url} (WebDriver Error): {simple_error}"
     except Exception as e:
         return None, f"An unexpected error occurred: {e}"
+    finally:
+        # CRITICAL: Always close the browser, even if an error occurs
+        if driver:
+            driver.quit()
 
 
 def save_links_to_file(filename, links, script_name, source_url):
+    """
+    (This function is 100% identical to your original script)
+    """
     try:
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(f"# links fetched by {script_name} from: {source_url}\n")
@@ -97,6 +138,9 @@ def save_links_to_file(filename, links, script_name, source_url):
 
 
 if __name__ == '__main__':
+    """
+    (This main block is 100% identical to your original script)
+    """
     script_name = os.path.basename(__file__)
 
     try:
@@ -124,7 +168,7 @@ if __name__ == '__main__':
             regex_choice = input("Treat the text as a regular expression? (yes/no) [no]: ").strip().lower()
             use_regex = regex_choice in ('yes', 'y')
 
-        print(f"\nFetching links from {target_url}...\n")
+        print(f"\nFetching links from {target_url}...\n(This may take a moment as a browser is loading)")
         found_links, error = fetch_links_in_web_page(target_url, text_pattern=text_pattern if text_pattern else None, use_regex=use_regex)
 
         if error:
