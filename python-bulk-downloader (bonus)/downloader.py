@@ -90,6 +90,7 @@ def main():
             print("\nFATAL ERROR: 'curl.exe' not found.")
             print("curl.exe is included in modern Windows 10/11.")
             print("Please ensure it's installed and your system's PATH variable is set correctly.")
+            print("or make sure you have curl.exe in the same directory as this python script")
             return  # Stop the script
             
         except subprocess.CalledProcessError as e:
